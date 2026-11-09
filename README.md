@@ -43,6 +43,7 @@ Lilu is used to be told when the kext is loaded, to solve the two symbols in the
 | `-udkbeta` | load on a kernel newer than Tahoe |
 | `udksettle=<ms>` | settle window, default 2000, at most 10000. `0` keeps only the check for an already terminated nub |
 | `udkport=<locationID>` | act only on the disk at this port, for example `udkport=0x14400000`. Default: every port |
+| `udktimer=<ms>` | how long a parked disk waits for its device to come back, in place of Apple's 1500 ms; from 1501 to 30000. Default: left alone |
 
 ## What it reports
 
@@ -56,6 +57,7 @@ ioreg -r -c USBDiskKeeper -l -w0
 |---|---|
 | `Hook` | `installed`, or `not installed: ...` with the reason, or `waiting for IOUSBMassStorageDriver to load` |
 | `SettleMs`, `Port` | the settle window and the port filter in force (`0` = every port) |
+| `TimerMs` | how long a parked disk waits for its device: `1500` unless `udktimer` changed it |
 | `Wakes` | how many times a disk went through the hook |
 | `Parked` | the old interface nub powered on and was terminated within the window: the forced eject this plugin prevents |
 | `Gone` | the old interface nub did not power on: Apple's own path, nothing to do |
@@ -106,6 +108,6 @@ Only the Command Line Tools are needed. The script uses [MacKernelSDK](https://g
 ## Limits
 
 - The settle window is a guess about the board. If the loss is declared later than the window, the wake goes as it did without the plugin.
-- Apple's 1500 ms wait for the device to come back is unchanged. If the device takes longer, the disk is torn down (`not found during wake up`).
+- Apple's 1500 ms wait for the device to come back is unchanged by default. If the device takes longer, the disk is torn down (`not found during wake up`). `udktimer=<ms>` lengthens it by changing the two immediates that arm the timer in `setPowerState`; a disk really unplugged during sleep is then torn down that much later, and the wake is not complete until it is.
 - A loss while the system is awake is not covered: the driver nub is attached then, and only a reset in progress saves it.
 - The plugin acts where `IOUSBMassStorageDriver` is the driver: Bulk-Only and UAS disks and card readers. Other USB devices that drop at wake are not its business.

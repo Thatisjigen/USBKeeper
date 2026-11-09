@@ -1,7 +1,7 @@
 //
 //  The byte-level part of USBDiskKeeper: finding, in IOUSBMassStorageDriverNub::setPowerState, the calls to
-//  IOUSBMassStorageInterfaceNub::ClampPowerState. No kernel dependencies, so tests/ runs the same code on the bytes of
-//  the kernel collection on disk.
+//  IOUSBMassStorageInterfaceNub::ClampPowerState and the two places that arm the re-enumeration timer. No kernel
+//  dependencies, so tests/ runs the same code on the bytes of the kernel collection on disk.
 //
 #ifndef callsite_hpp
 #define callsite_hpp
@@ -49,6 +49,32 @@ static inline bool nearDisplacement(uint64_t address, uint64_t target, int32_t &
 	const int64_t wide = static_cast<int64_t>(target - (address + 5));
 	disp = static_cast<int32_t>(wide);
 	return wide == disp;
+}
+
+static constexpr uint32_t TimerDefaultMs = 1500;
+
+struct TimerLoads {
+	size_t count {0};                        // places that arm the timer with 1500 ms
+	size_t at[2] {NotFound, NotFound};       // offsets of their 32-bit immediates
+	bool asExpected() const { return count == 2; }
+};
+
+//  setPowerState arms the timer that gives up on a device that does not come back in two places, both
+//  "movl $1500, %esi; callq *0x1d0(%rax)", which is fTimer->setTimeoutMS(1500).
+static inline TimerLoads findTimerLoads(const uint8_t *code, size_t span) {
+	static const uint8_t pattern[] {0xBE, 0xDC, 0x05, 0x00, 0x00, 0xFF, 0x90, 0xD0, 0x01, 0x00, 0x00};
+	TimerLoads found;
+	for (size_t i = 0; i + sizeof(pattern) <= span; i++) {
+		size_t j = 0;
+		while (j < sizeof(pattern) && code[i + j] == pattern[j])
+			j++;
+		if (j != sizeof(pattern))
+			continue;
+		if (found.count < 2)
+			found.at[found.count] = i + 1;
+		found.count++;
+	}
+	return found;
 }
 
 }

@@ -7,7 +7,8 @@
 
 Solves the two symbols the way Lilu 1.7.2 does for a kext of the boot collection (kern_mach.cpp, kcGetRunningAddresses and
 solveSymbol: the entry's own LC_SYMTAB inside the shared __LINKEDIT, first non-stab entry with that exact name), then looks,
-in IOUSBMassStorageDriverNub::setPowerState, for the two calls to IOUSBMassStorageInterfaceNub::ClampPowerState. Prints what
+in IOUSBMassStorageDriverNub::setPowerState, for the two calls to IOUSBMassStorageInterfaceNub::ClampPowerState and for the
+two places that arm the 1500 ms re-enumeration timer (changed only with udktimer=). Prints what
 it finds and exits 1 if anything differs from what the kext expects; the kext makes the same checks on the running kernel and
 installs nothing when they fail. Lilu reads the collection in memory, where xnu has already slid the symbol values; the
 addresses printed here are the unslid ones.
@@ -23,6 +24,7 @@ ENTRY = 'com.apple.iokit.IOUSBMassStorageDriver'
 CLAMP = '__ZN28IOUSBMassStorageInterfaceNub15ClampPowerStateEm'
 POWER = '__ZN25IOUSBMassStorageDriverNub13setPowerStateEmP9IOService'
 SCAN = 0x400                                                     # the kext scans this many bytes of setPowerState
+TIMER = bytes.fromhex('bedc050000ff90d0010000')                  # movl $1500, %esi; callq *0x1d0(%rax)
 LC_SEGMENT_64, LC_SYMTAB, LC_UUID, LC_FILESET_ENTRY = 0x19, 0x2, 0x1b, 0x80000035
 kc = open(KC, 'rb').read()
 bad = []
@@ -110,6 +112,11 @@ print(f'  with state 1 (6a 01 5e before the call): {[hex(i) for i in on]}; with 
 if len(calls) != 2 or len(on) != 1 or len(off) != 1:
     bad.append('call sites')
 whole = kc[vm2off(text[0]):vm2off(text[0]) + text[3]]
+timers = [i for i in range(len(body) - len(TIMER) + 1) if body[i:i + len(TIMER)] == TIMER]
+everywhere = [text[0] + i for i in range(len(whole) - len(TIMER) + 1) if whole[i:i + len(TIMER)] == TIMER]
+print(f'  setTimeoutMS(1500) ({TIMER.hex(" ")}): in the scanned bytes at {[hex(i) for i in timers]}; in the whole text of the entry at {[hex(a) for a in everywhere]}')
+if len(timers) != 2 or everywhere != [power + i for i in timers]:
+    bad.append('timer immediates (udktimer= would be refused)')
 # every caller of ClampPowerState in the entry: a direct call or jump from anywhere else would bypass the redirected call
 callers = [text[0] + i for i in range(len(whole) - 5) if whole[i] in (0xe8, 0xe9) and text[0] + i + 5 + struct.unpack_from('<i', whole, i + 1)[0] == clamp]
 print(f'  direct calls or jumps to ClampPowerState in the whole text: {[hex(a) for a in callers]}')
@@ -117,6 +124,6 @@ if callers != [power + i for i in calls]:
     bad.append('other callers')
 if DUMP:
     open(DUMP, 'wb').write(body)
-    print(f'DUMP {DUMP} {power:#x} {clamp:#x} {on[0] if on else 0:#x} {off[0] if off else 0:#x}')
+    print(f'DUMP {DUMP} {power:#x} {clamp:#x} {on[0] if on else 0:#x} {off[0] if off else 0:#x} ' + ' '.join(f'{i + 1:#x}' for i in timers))
 print('RESULT:', 'as the kext expects' if not bad else 'DIFFERENT: ' + ', '.join(bad))
 sys.exit(1 if bad else 0)

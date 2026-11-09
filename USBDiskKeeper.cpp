@@ -28,7 +28,8 @@
 //  Nothing is written unless setPowerState holds exactly the two expected calls.
 //
 //  Boot-args: -udkoff, -udkdbg, -udkbeta; udksettle=<ms> (default 2000, 0 = only refuse a nub that is already
-//  dead); udkport=<locationID> (only that port; default every port).
+//  dead); udkport=<locationID> (only that port; default every port); udktimer=<ms> (how long a parked disk waits for
+//  its device to come back, in place of Apple's 1500; default: left alone).
 //
 //  What happened is kept on this kext's registry entry (ioreg -r -c USBDiskKeeper -l): whether the hook is installed,
 //  a count of each outcome and the last wakes. A kext injected by a boot loader does not reach the unified log, and
@@ -59,9 +60,12 @@ static constexpr size_t ScanSpan = 0x400;            // IOUSBMassStorageDriverNu
 static constexpr uint32_t SettleDefaultMs = 2000;
 static constexpr uint32_t SettleMaxMs = 10000;       // Apple's own poll in the same call gives up after 15 s
 static constexpr uint32_t PollMs = 10;               // the step of Apple's poll
+static constexpr uint32_t TimerMaxMs = 30000;        // the driver nub defers its power acknowledgement for 100 s at most
 
 static uint32_t settleMs = SettleDefaultMs;
 static uint32_t onlyPort = 0;
+static uint32_t timerWantedMs = 0;                   // udktimer; 0 = leave Apple's value
+static uint32_t timerMs = CallSite::TimerDefaultMs;  // the value in force
 static mach_vm_address_t orgClamp = 0;
 
 //  One wake of one disk.
@@ -101,6 +105,7 @@ static void publish() {
 	me->setProperty("Hook", hookState);
 	me->setProperty("SettleMs", settleMs, 32);
 	me->setProperty("Port", onlyPort, 32);
+	me->setProperty("TimerMs", timerMs, 32);
 	me->setProperty("Wakes", wakes, 32);
 	for (size_t i = 0; i < OutcomeCount; i++)
 		me->setProperty(outcomeKey[i], outcomes[i], 32);
@@ -261,6 +266,24 @@ static void onMassStorageLoad(void *, KernelPatcher &patcher, size_t id, mach_vm
 	DBGLOG("udk", "ClampPowerState 0x%llx, setPowerState 0x%llx, other call at +0x%lx, wrapper 0x%llx", clamp, setPowerState,
 		calls.off, target);
 	hookState = "installed";
+
+	// A parked disk gives up on its device after 1500 ms. Only on request: a disk really unplugged during sleep is then
+	// torn down that much later, and the wake is not complete until it is.
+	if (timerWantedMs != 0) {
+		const auto loads = CallSite::findTimerLoads(reinterpret_cast<const uint8_t *>(setPowerState), span);
+		if (!loads.asExpected()) {
+			SYSLOG("udk", "timer left at %u ms: setPowerState arms it in %lu places, expected 2", timerMs, loads.count);
+		} else if (MachInfo::setKernelWriting(true, KernelPatcher::kernelWriteLock) != KERN_SUCCESS) {
+			SYSLOG("udk", "timer left at %u ms: kernel text cannot be written", timerMs);
+		} else {
+			for (const auto at : loads.at)
+				*reinterpret_cast<CallSite::rel32_t *>(setPowerState + at) = static_cast<int32_t>(timerWantedMs);
+			MachInfo::setKernelWriting(false, KernelPatcher::kernelWriteLock);
+			timerMs = timerWantedMs;
+			SYSLOG("udk", "a parked disk now waits %u ms for its device to come back, not %u (setPowerState+0x%lx and +0x%lx)",
+				timerMs, CallSite::TimerDefaultMs, loads.at[0], loads.at[1]);
+		}
+	}
 	publish();
 }
 
@@ -270,6 +293,9 @@ static void pluginStart() {
 		settleMs = value > SettleMaxMs ? SettleMaxMs : value;
 	if (lilu_get_boot_args("udkport", &value, sizeof(value)))
 		onlyPort = value;
+	// Never shorter than Apple's wait: that would only lose disks that come back today.
+	if (lilu_get_boot_args("udktimer", &value, sizeof(value)) && value > CallSite::TimerDefaultMs)
+		timerWantedMs = value > TimerMaxMs ? TimerMaxMs : value;
 
 	stateLock = IOLockAlloc();
 
