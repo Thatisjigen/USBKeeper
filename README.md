@@ -44,6 +44,28 @@ Lilu is used to be told when the kext is loaded, to solve the two symbols in the
 | `udksettle=<ms>` | settle window, default 2000, at most 10000. `0` keeps only the check for an already terminated nub |
 | `udkport=<locationID>` | act only on the disk at this port, for example `udkport=0x14400000`. Default: every port |
 
+## What it reports
+
+Its own entry in the registry holds the result, readable at any time and without root:
+
+```bash
+ioreg -r -c USBDiskKeeper -l -w0
+```
+
+| Property | Meaning |
+|---|---|
+| `Hook` | `installed`, or `not installed: ...` with the reason, or `waiting for IOUSBMassStorageDriver to load` |
+| `SettleMs`, `Port` | the settle window and the port filter in force (`0` = every port) |
+| `Wakes` | how many times a disk went through the hook |
+| `Parked` | the old interface nub powered on and was terminated within the window: the forced eject this plugin prevents |
+| `Gone` | the old interface nub did not power on: Apple's own path, nothing to do |
+| `Dead` | the old interface nub was already terminated when Apple's call returned success |
+| `Kept` | no loss within the window: the disk re-attached to the device it had |
+| `Skipped` | a disk on another port than the one given with `udkport` |
+| `Events` | the last eight, oldest first: number, outcome, port, `clamp` (ms spent in Apple's call), `settle` (ms held after it), `at` (wall clock, seconds since 1970) |
+
+A wake that kept the disk shows `Parked` or `Gone` here, and in the system log Apple's own `re-instantiated during wake up`.
+
 ## What it logs
 
 One line when `IOUSBMassStorageDriver` is loaded (`installed: ...` or `not installed: ...` with the reason) and one line for every disk at every wake:
