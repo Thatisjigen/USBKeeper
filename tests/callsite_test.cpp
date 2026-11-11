@@ -116,7 +116,7 @@ int main(int argc, char **argv) {
 		// After the change both read the new value, nothing else moved, and a second look finds none left to change.
 		auto patched = code;
 		for (const auto at : loads.at)
-			*reinterpret_cast<CallSite::rel32_t *>(patched.data() + at) = 5000;
+			*reinterpret_cast<CallSite::rel32_t *>(patched.data() + at) = static_cast<int32_t>(CallSite::TimerKeptMs);
 		size_t changed = 0;
 		for (size_t i = 0; i < code.size(); i++)
 			if (patched[i] != code[i]) {
@@ -138,6 +138,22 @@ int main(int argc, char **argv) {
 		CHECK(CallSite::findTimerLoads(code.data(), loads.at[1] + 9).count == 1);     // cut inside the second pattern
 	}
 	CHECK(CallSite::findTimerLoads(code.data(), 0).count == 0);
+
+	// The wait that is armed: 5000 ms without udktimer=, the value given between 1501 and 30000, capped above,
+	// Apple's own timer left alone for 1500 or less.
+	CHECK(CallSite::TimerKeptMs > CallSite::TimerDefaultMs && CallSite::TimerKeptMs <= CallSite::TimerMaxMs);
+	CHECK(CallSite::timerToArm(false, 0) == CallSite::TimerKeptMs);
+	CHECK(CallSite::timerToArm(false, 20000) == CallSite::TimerKeptMs);       // a stale value is not read
+	CHECK(CallSite::timerToArm(true, 0) == 0);
+	CHECK(CallSite::timerToArm(true, 1) == 0);
+	CHECK(CallSite::timerToArm(true, CallSite::TimerDefaultMs) == 0);
+	CHECK(CallSite::timerToArm(true, CallSite::TimerDefaultMs + 1) == CallSite::TimerDefaultMs + 1);
+	CHECK(CallSite::timerToArm(true, 4000) == 4000);
+	CHECK(CallSite::timerToArm(true, CallSite::TimerMaxMs) == CallSite::TimerMaxMs);
+	CHECK(CallSite::timerToArm(true, CallSite::TimerMaxMs + 1) == CallSite::TimerMaxMs);
+	CHECK(CallSite::timerToArm(true, 0xFFFFFFFFu) == CallSite::TimerMaxMs);
+	printf("timer: %u ms by default, Apple's %u ms with udktimer=%u or less, at most %u ms\n", CallSite::TimerKeptMs,
+		CallSite::TimerDefaultMs, CallSite::TimerDefaultMs, CallSite::TimerMaxMs);
 
 	printf("%s\n", failures ? "FAILED" : "all checks passed");
 	return failures ? 1 : 0;

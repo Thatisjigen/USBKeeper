@@ -8,7 +8,7 @@
 Solves the two symbols the way Lilu 1.7.2 does for a kext of the boot collection (kern_mach.cpp, kcGetRunningAddresses and
 solveSymbol: the entry's own LC_SYMTAB inside the shared __LINKEDIT, first non-stab entry with that exact name), then looks,
 in IOUSBMassStorageDriverNub::setPowerState, for the two calls to IOUSBMassStorageInterfaceNub::ClampPowerState and for the
-two places that arm the 1500 ms re-enumeration timer (changed only with udktimer=). Prints what
+two places that arm the 1500 ms re-enumeration timer (the kext arms it with 5000 ms). Prints what
 it finds and exits 1 if anything differs from what the kext expects; the kext makes the same checks on the running kernel and
 installs nothing when they fail. Lilu reads the collection in memory, where xnu has already slid the symbol values; the
 addresses printed here are the unslid ones.
@@ -116,7 +116,7 @@ timers = [i for i in range(len(body) - len(TIMER) + 1) if body[i:i + len(TIMER)]
 everywhere = [text[0] + i for i in range(len(whole) - len(TIMER) + 1) if whole[i:i + len(TIMER)] == TIMER]
 print(f'  setTimeoutMS(1500) ({TIMER.hex(" ")}): in the scanned bytes at {[hex(i) for i in timers]}; in the whole text of the entry at {[hex(a) for a in everywhere]}')
 if len(timers) != 2 or everywhere != [power + i for i in timers]:
-    bad.append('timer immediates (udktimer= would be refused)')
+    bad.append('timer immediates (the kext would leave the timer at 1500 ms)')
 # every caller of ClampPowerState in the entry: a direct call or jump from anywhere else would bypass the redirected call
 callers = [text[0] + i for i in range(len(whole) - 5) if whole[i] in (0xe8, 0xe9) and text[0] + i + 5 + struct.unpack_from('<i', whole, i + 1)[0] == clamp]
 print(f'  direct calls or jumps to ClampPowerState in the whole text: {[hex(a) for a in callers]}')

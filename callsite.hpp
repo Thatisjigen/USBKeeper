@@ -1,7 +1,8 @@
 //
 //  The byte-level part of USBDiskKeeper: finding, in IOUSBMassStorageDriverNub::setPowerState, the calls to
-//  IOUSBMassStorageInterfaceNub::ClampPowerState and the two places that arm the re-enumeration timer. No kernel
-//  dependencies, so tests/ runs the same code on the bytes of the kernel collection on disk.
+//  IOUSBMassStorageInterfaceNub::ClampPowerState and the two places that arm the re-enumeration timer, and choosing
+//  the wait to arm it with. No kernel dependencies, so tests/ runs the same code on the bytes of the kernel
+//  collection on disk.
 //
 #ifndef callsite_hpp
 #define callsite_hpp
@@ -51,7 +52,20 @@ static inline bool nearDisplacement(uint64_t address, uint64_t target, int32_t &
 	return wide == disp;
 }
 
-static constexpr uint32_t TimerDefaultMs = 1500;
+static constexpr uint32_t TimerDefaultMs = 1500;     // Apple's wait for the device of a parked disk
+static constexpr uint32_t TimerKeptMs = 5000;        // the wait this kext puts in its place
+static constexpr uint32_t TimerMaxMs = 30000;        // the driver nub defers its power acknowledgement for 100 s at most
+
+//  The wait to put in place of Apple's, in ms; 0 leaves Apple's timer as it is. `asked` is the value of udktimer=
+//  and counts only when the argument was given. Never shorter than Apple's wait: that would only lose disks that
+//  come back today.
+static inline uint32_t timerToArm(bool given, uint32_t asked) {
+	if (!given)
+		return TimerKeptMs;
+	if (asked <= TimerDefaultMs)
+		return 0;
+	return asked > TimerMaxMs ? TimerMaxMs : asked;
+}
 
 struct TimerLoads {
 	size_t count {0};                        // places that arm the timer with 1500 ms

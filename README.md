@@ -21,13 +21,13 @@ After a successful `ClampPowerState(1)` the plugin holds the driver nub parked f
 
 It also refuses an interface nub that is already terminated when the call returns success. Apple's function has an early exit that does not look, and re-attaching to such a nub ends in `PowerOnTerminate`.
 
-A disk really unplugged during sleep is handled as before: the driver nub waits its 1500 ms and the stack is torn down.
+A parked driver nub waits for its device to be enumerated again, and Apple's driver gives it 1500 ms, counted from the moment the old interface nub is gone. The device usually comes back in 0.7 to 0.8 s, but it has been seen to take 1.6 to 1.7 s; the disk stack is then torn down all the same (`not found during wake up`), and the device that appears a moment later is a new disk. The plugin arms that timer with 5000 ms instead, by rewriting the two immediates that set it in `IOUSBMassStorageDriverNub::setPowerState`. A disk really unplugged during sleep is torn down after those 5 s.
 
 ## How it hooks
 
 `ClampPowerState` is not virtual and has exactly two callers, both in `IOUSBMassStorageDriverNub::setPowerState`. The plugin rewrites the displacement of the one `call` made with state 1, so that it lands in the plugin, and calls the original at its own address. The function itself is not modified and no trampoline is built: Lilu 1.7.2 hands out trampolines from a single 4096-byte pool shared by all plugins, and once the pool is full it reports success and routes nothing.
 
-Lilu is used to be told when the kext is loaded, to solve the two symbols in the running kernel collection and to open kernel text for the four-byte write. Nothing is written unless `setPowerState` holds exactly one call with state 1 and one with state 0, and the plugin is within reach of a near call.
+Lilu is used to be told when the kext is loaded, to solve the two symbols in the running kernel collection and to open kernel text for the four-byte write. Nothing is written unless `setPowerState` holds exactly one call with state 1 and one with state 0, and the plugin is within reach of a near call. The timer is changed only after that, and only when `setPowerState` arms it in exactly two places (`movl $1500, %esi; callq *0x1d0(%rax)`).
 
 ## Requirements
 
@@ -43,7 +43,7 @@ Lilu is used to be told when the kext is loaded, to solve the two symbols in the
 | `-udkbeta` | load on a kernel newer than Tahoe |
 | `udksettle=<ms>` | settle window, default 2000, at most 10000. `0` keeps only the check for an already terminated nub |
 | `udkport=<locationID>` | act only on the disk at this port, for example `udkport=0x14400000`. Default: every port |
-| `udktimer=<ms>` | how long a parked disk waits for its device to come back, in place of Apple's 1500 ms; from 1501 to 30000. Default: left alone |
+| `udktimer=<ms>` | how long a parked disk waits for its device to come back, in place of Apple's 1500 ms. Default 5000, at most 30000; `1500` or less leaves Apple's timer as it is |
 
 ## What it reports
 
@@ -57,16 +57,16 @@ ioreg -r -c USBDiskKeeper -l -w0
 |---|---|
 | `Hook` | `installed`, or `not installed: ...` with the reason, or `waiting for IOUSBMassStorageDriver to load` |
 | `SettleMs`, `Port` | the settle window and the port filter in force (`0` = every port) |
-| `TimerMs` | how long a parked disk waits for its device: `1500` unless `udktimer` changed it |
+| `TimerMs` | how long a parked disk waits for its device: `5000`, the `udktimer` value, or `1500` when Apple's timer was left as it is or could not be changed |
 | `Wakes` | how many times a disk went through the hook |
 | `Parked` | the old interface nub powered on and was terminated within the window: the forced eject this plugin prevents |
-| `Gone` | the old interface nub did not power on: Apple's own path, nothing to do |
+| `Gone` | the old interface nub did not power on: Apple's own path, the disk is parked without the plugin's help |
 | `Dead` | the old interface nub was already terminated when Apple's call returned success |
 | `Kept` | no loss within the window: the disk re-attached to the device it had |
 | `Skipped` | a disk on another port than the one given with `udkport` |
 | `Events` | the last eight, oldest first: number, outcome, port, `clamp` (ms spent in Apple's call), `settle` (ms held after it), `at` (wall clock, seconds since 1970) |
 
-A wake that kept the disk shows `Parked` or `Gone` here, and in the system log Apple's own `re-instantiated during wake up`.
+`Parked` and `Gone` say only that the disk was parked. Whether its device then came back within `TimerMs` is in the system log: Apple's own `re-instantiated during wake up` when it did, `not found during wake up` when it did not.
 
 ## What it logs
 
@@ -108,6 +108,6 @@ Only the Command Line Tools are needed. The script uses [MacKernelSDK](https://g
 ## Limits
 
 - The settle window is a guess about the board. If the loss is declared later than the window, the wake goes as it did without the plugin.
-- Apple's 1500 ms wait for the device to come back is unchanged by default. If the device takes longer, the disk is torn down (`not found during wake up`). `udktimer=<ms>` lengthens it by changing the two immediates that arm the timer in `setPowerState`; a disk really unplugged during sleep is then torn down that much later, and the wake is not complete until it is.
+- A device that takes longer than `TimerMs` to come back still loses its disk. The longer wait costs only when the device does not come back: a disk really unplugged during sleep is torn down 5 s after the wake instead of 1.5 s, and the driver nub's power change stays open until then. The nub promises the kernel 100 s for that change, so the power management watchdog allows far more than the wait.
 - A loss while the system is awake is not covered: the driver nub is attached then, and only a reset in progress saves it.
 - The plugin acts where `IOUSBMassStorageDriver` is the driver: Bulk-Only and UAS disks and card readers. Other USB devices that drop at wake are not its business.
